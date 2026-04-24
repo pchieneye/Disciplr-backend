@@ -11,10 +11,8 @@ import { Request, Response, NextFunction } from 'express'
  * - Preserves the existing error envelope format used throughout the application
  */
 export const requireJson = (req: Request, res: Response, next: NextFunction) => {
-  // Methods that typically don't have request bodies
   const bodylessMethods = ['GET', 'HEAD', 'OPTIONS']
   
-  // Skip content-type check for methods that don't have bodies
   if (bodylessMethods.includes(req.method)) {
     return next()
   }
@@ -28,15 +26,22 @@ export const requireJson = (req: Request, res: Response, next: NextFunction) => 
 
   const contentType = req.headers['content-type']
   
-  if (!contentType || !contentType.toLowerCase().includes('application/json')) {
+  if (!contentType) {
     return res.status(415).json({
       error: 'Unsupported Media Type: Content-Type must be application/json'
     })
   }
 
-  const lowerContentType = contentType.toLowerCase()
-  if (lowerContentType.includes('charset')) {
-    const charsetMatch = lowerContentType.match(/charset=([^;]+)/i)
+  const normalizedContentType = contentType.toLowerCase().trim()
+  
+  if (!normalizedContentType.includes('application/json')) {
+    return res.status(415).json({
+      error: 'Unsupported Media Type: Content-Type must be application/json'
+    })
+  }
+
+  if (normalizedContentType.includes('charset')) {
+    const charsetMatch = normalizedContentType.match(/charset=([^;]+)/i)
     if (charsetMatch && charsetMatch[1].trim().toLowerCase() !== 'utf-8') {
       return res.status(415).json({
         error: 'Unsupported Media Type: Only UTF-8 charset is supported for JSON'
