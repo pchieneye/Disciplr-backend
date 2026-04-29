@@ -10,7 +10,7 @@ import {
 import { authenticate, authorize } from '../middleware/auth.js'
 import { strictRateLimiter } from '../middleware/rateLimiter.js'
 import { createAuditLog } from '../lib/audit-logs.js'
-import { formatValidationError } from '../lib/validation.js'
+import { formatValidationError, utcTimestampSchema } from '../lib/validation.js'
 
 // Helpers
 
@@ -41,7 +41,7 @@ const enqueueSchema = z.discriminatedUnion('type', [
     payload: z.object({
       triggerSource: z.enum(['manual', 'scheduler']),
       vaultId: z.string().optional(),
-      deadlineIso: z.string().optional(),
+      deadlineIso: utcTimestampSchema.optional(),
     }),
     ...enqueueOptionsSchema,
   }),
