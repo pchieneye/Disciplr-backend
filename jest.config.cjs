@@ -19,6 +19,6 @@ module.exports = {
       },
     ],
   },
-  testMatch: ["**/tests/**/*.test.ts"],
+  testMatch: ["**/tests/**/*.test.ts", "**/src/tests/**/*.test.ts"],
   clearMocks: true,
 };

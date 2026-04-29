@@ -20,9 +20,8 @@ const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/
 
 // ─── Reusable field schemas ──────────────────────────────────────────────────
 
-// Zod v4 uses { error: '...' } instead of { required_error: '...' }
 const stellarAddressSchema = z
-  .string({ error: 'required' })
+  .string({ message: 'required' })
   .regex(STELLAR_ADDRESS_RE, 'must be a valid Stellar public key')
 
 /**
@@ -33,7 +32,7 @@ const stellarAddressSchema = z
 const amountStringSchema = z.preprocess(
   (val) => (typeof val === 'number' ? String(val) : val),
   z
-    .string({ error: 'required' })
+    .string({ message: 'required' })
     .refine(
       (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 },
       'must be a positive number',
@@ -45,14 +44,14 @@ const amountStringSchema = z.preprocess(
 )
 
 const isoTimestampSchema = z
-  .string({ error: 'required' })
+  .string({ message: 'required' })
   .refine((v) => !isNaN(Date.parse(v)), 'must be a valid ISO timestamp')
 
 // ─── Milestone schema ────────────────────────────────────────────────────────
 
 const milestoneSchema = z.object({
   title: z
-    .string({ error: 'is required' })
+    .string({ message: 'is required' })
     .refine((v) => v.trim().length > 0, 'is required'),
   description: z.string().optional(),
   dueDate: isoTimestampSchema,
@@ -66,7 +65,7 @@ export const createVaultSchema = z
     amount: amountStringSchema,
     startDate: isoTimestampSchema,
     endDate: isoTimestampSchema,
-    verifier: stellarAddressSchema,
+    verifier: z.string({ error: 'required' }).min(1, 'is required'),
     destinations: z.object({
       success: stellarAddressSchema,
       failure: stellarAddressSchema,
