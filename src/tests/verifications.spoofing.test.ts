@@ -4,6 +4,7 @@ import { jest } from '@jest/globals'
 
 const mockRecordVerification = jest.fn<any>()
 const mockListVerifications = jest.fn<any>()
+const mockCreateAuditLog = jest.fn<any>()
 
 jest.unstable_mockModule('../middleware/auth.js', () => ({
   authenticate: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
@@ -26,6 +27,10 @@ jest.unstable_mockModule('../services/verifiers.js', () => ({
   listVerifications: mockListVerifications,
 }))
 
+jest.unstable_mockModule('../lib/audit-logs.js', () => ({
+  createAuditLog: mockCreateAuditLog,
+}))
+
 const { verificationsRouter } = await import('../routes/verifications.js')
 
 describe('verification route spoofing protections', () => {
@@ -36,6 +41,7 @@ describe('verification route spoofing protections', () => {
   beforeEach(() => {
     mockRecordVerification.mockReset()
     mockListVerifications.mockReset()
+    mockCreateAuditLog.mockReset()
   })
 
   test('uses authenticated verifier identity, not client-supplied body identity', async () => {
