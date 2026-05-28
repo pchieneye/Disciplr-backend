@@ -1,73 +1,75 @@
-# Disciplr Smart Contracts
+# Disciplr Soroban Contracts
 
-Soroban smart contracts for the Disciplr accountability vault system on Stellar.
+On-chain programmable, time-locked capital vaults for accountability staking,
+the chain-side counterpart to the `disciplr-backend` API and Horizon listener.
+
+## Workspace layout
+
+```text
+contracts/
+├── Cargo.toml                       # workspace manifest (soroban-sdk = "23")
+├── README.md
+└── accountability_vault/
+    ├── Cargo.toml
+    ├── Makefile
+    └── src/
+        ├── lib.rs                   # AccountabilityVault contract
+        └── test.rs                  # unit tests (testutils)
+```
 
 ## accountability_vault
 
-A time-locked capital vault that releases funds to a `success_destination` when
-all milestones are verified, or sweeps them to a `failure_destination` when the
-deadline passes without full verification.
+Implements the vault lifecycle that the backend models off-chain in
+`src/services/vaultTransitions.ts` and parses events for in
+`src/services/eventParser.ts`:
 
-### Entry points
-
-| Function | Description |
+| Function | Purpose |
 |---|---|
-| `initialize` | Create a new vault with creator, destinations, token, amount, deadline, and milestone count |
-| `check_in(verifier, milestone_index)` | Record a verified milestone (verifier must sign) |
-| `claim()` | Release funds to `success_destination` — requires all milestones verified |
-| `slash_on_miss()` | Sweep funds to `failure_destination` — requires deadline passed |
-| `get_vault()` | Read current vault state |
-| `get_check_in(milestone_index)` | Read a check-in entry |
+| `create_vault` | Create a `Draft` vault with milestones, verifier, and success/failure destinations. Validates amount, deadline, and that milestone amounts sum to the total. |
+| `stake` | Creator transfers the SEP-41 token into the contract; `Draft` -> `Active`. |
+| `check_in` | Designated verifier confirms a milestone before its `due_date`. |
+| `slash_on_miss` | After the deadline with unverified milestones, slash funds to `failure_destination`; `Active` -> `Failed`. |
+| `claim` | When all milestones are verified, release funds to `success_destination`; `Active` -> `Completed`. |
+| `withdraw` | Cancel/refund an unfunded or unstarted vault to the creator; -> `Cancelled`. |
+| `get_vault` | Read-only accessor for the current vault record. |
 
-### Storage TTL (Issue #359)
+The `VaultStatus` enum (`Draft`/`Active`/`Completed`/`Failed`/`Cancelled`)
+mirrors `PersistedVault.status` in `src/types/vaults.ts`. Emitted events
+(`vault_created`, `vault_staked`, `milestone_checked_in`, `vault_slashed`,
+`vault_completed`, `vault_cancelled`, `vault_withdrawn`) align with the topics
+consumed by the backend event parser.
 
-Soroban persistent storage entries are subject to archival if their TTL expires.
-For long-running vaults this is a risk: a vault created months before its
-`end_timestamp` could be archived before settlement.
+## Build & test
 
-**Strategy:** every write and read of an active vault bumps the TTL of the
-`Vault` and `CheckIn` entries to at least `end_timestamp` (computed as
-`(end_timestamp - now) / 5 ledgers-per-second`, clamped to a minimum of
-`MIN_TTL_LEDGERS = 17_280` ≈ 1 day).
-
-Terminal vaults (`Completed` / `Slashed`) are **not** extended — they can be
-archived once settled.
-
-**Operator note:** if a vault's `end_timestamp` is more than ~6 months in the
-future, operators should monitor the Stellar network's `max_entry_ttl` parameter
-and call `get_vault()` periodically to keep the entry alive.
-
-### Settlement-summary event (Issue #373)
-
-Both `claim` and `slash_on_miss` emit a `settlement_summary` event so the
-backend ETL pipeline (`src/services/etlWorker.ts`) can compute success-rate
-analytics without re-querying the ledger.
-
-**Topic:** `["settle"]`
-
-**Data:** `(released_amount: i128, slashed_amount: i128, verified_count: u32, final_status: Symbol)`
-
-| Field | `claim` | `slash_on_miss` |
-|---|---|---|
-| `released_amount` | vault amount | `0` |
-| `slashed_amount` | `0` | vault amount |
-| `verified_count` | milestone_count | partial count |
-| `final_status` | `"completed"` | `"slashed"` |
-
-The event type `settlement_summary` is registered in
-`src/types/horizonSync.ts` (`EventType` union) so `src/services/eventParser.ts`
-can route it to the analytics pipeline.
-
-### Building
+From the `contracts/accountability_vault` directory:
 
 ```bash
-cd contracts/accountability_vault
-cargo build --target wasm32-unknown-unknown --release
+make build
+make test
+make fmt
+make clippy
 ```
 
-### Testing
+Available targets:
+
+| Target | Command |
+|---|---|
+| `make build` | `stellar contract build` |
+| `make test` | `cargo test` |
+| `make fmt` | `cargo fmt -- --check` |
+| `make clippy` | `cargo clippy -- -D warnings` |
+
+You can also run the commands manually from the `contracts/` directory:
 
 ```bash
-cd contracts/accountability_vault
+stellar contract build
 cargo test
 ```
+
+## Backend integration
+
+`src/services/soroban.ts` calls `create_vault` via the Stellar SDK
+(`@stellar/stellar-sdk` v14). The Horizon listener
+(`src/services/horizonListener.ts`) and `src/services/eventParser.ts`
+ingest the events emitted by these functions to keep the off-chain vault state
+in sync.
