@@ -26,10 +26,17 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
 
      try {
           const payload = jwt.verify(token, JWT_SECRET) as JwtPayload
-          
+
+          // Reject tokens with iat too far in the future (beyond clock tolerance)
+          const iat = (payload as any).iat as number | undefined
+          if (iat && iat > Math.floor(Date.now() / 1000) + 30) {
+               res.status(401).json({ error: 'Invalid token' })
+               return
+          }
+
           if (payload.jti) {
                const isValid = await validateSession(payload.jti)
-               
+
                if (!isValid) {
                     res.status(401).json({ error: 'Session revoked or expired' })
                     return

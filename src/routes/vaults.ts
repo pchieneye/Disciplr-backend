@@ -9,9 +9,10 @@ import {
   getIdempotentResponse,
   hashRequestPayload,
   saveIdempotentResponse,
+  IdempotencyConflictError,
 } from '../services/idempotency.js'
 import { buildVaultCreationPayload } from '../services/soroban.js'
-import { createVaultWithMilestones, getVaultById, listVaults, cancelVaultById } from '../services/vaultStore.js'
+import { createVaultWithMilestones, getVaultById, listVaults, cancelVaultById, updateVaultById, getVaultRevisionById } from '../services/vaultStore.js'
 import { createVaultSchema, flattenZodErrors } from '../services/vaultValidation.js'
 import { queryParser } from '../middleware/queryParser.js'
 import { utcNow } from '../utils/timestamps.js'
@@ -27,16 +28,16 @@ export interface Vault {
   id: string
   creator: string
   amount: string
-  status: 'active' | 'completed' | 'failed' | 'cancelled'
+  status: 'draft' | 'active' | 'completed' | 'failed' | 'cancelled'
   startTimestamp: string
   endTimestamp: string
   successDestination: string
   failureDestination: string
+  verifier?: string
   createdAt: string
 }
 
 // GET /api/vaults
-
 vaultsRouter.get(
   '/',
   authenticate,
@@ -82,7 +83,6 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response) => {
     }
   }
 
-  // 2. Validate with Zod (Soroban-aligned bounds)
   const parseResult = createVaultSchema.safeParse(req.body)
   if (!parseResult.success) {
     res.status(400).json({ details: flattenZodErrors(parseResult.error) })
@@ -91,10 +91,8 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response) => {
 
   const input = parseResult.data
 
-  // 3. Persist and respond
   try {
     const { vault } = await createVaultWithMilestones(input)
-
     const responseBody: VaultCreateResponse = {
       vault,
       onChain: await buildVaultCreationPayload(input, vault),
@@ -115,7 +113,6 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response) => {
     })
 
     updateAnalyticsSummary()
-
     res.status(201).json(responseBody)
   } catch (error) {
     console.error('Vault creation failed', error)
@@ -125,6 +122,7 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response) => {
 
 // ─── GET /api/vaults/:id ─────────────────────────────────────────────────────
 
+// GET /api/vaults/:id
 vaultsRouter.get('/:id', authenticate, async (req: Request, res: Response) => {
   // Try DB-backed store first (falls back to in-memory automatically)
   try {
@@ -143,10 +141,36 @@ vaultsRouter.get('/:id', authenticate, async (req: Request, res: Response) => {
     res.status(404).json({ error: 'Vault not found' })
     return
   }
+  
+  // Return the vault found in legacy in-memory storage
+  res.json(vault)
 })
 
-// ─── POST /api/vaults/:id/cancel ─────────────────────────────────────────────
+// PATCH /api/vaults/:id — optimistic-lock update; requires X-Vault-Revision header
+vaultsRouter.patch('/:id', authenticate, async (req: Request, res: Response) => {
+  const revision = req.header('x-vault-revision') ?? ''
+  if (!revision) {
+    res.status(400).json({ error: 'X-Vault-Revision header is required' })
+    return
+  }
 
+  try {
+    const updated = await updateVaultById(req.params.id, revision, req.body)
+    res.json(updated)
+  } catch (err: any) {
+    if (err?.status === 409) {
+      res.status(409).json({ error: err.message ?? 'Vault update conflict' })
+      return
+    }
+    if (err?.status === 400) {
+      res.status(400).json({ error: err.message })
+      return
+    }
+    res.status(500).json({ error: 'Failed to update vault' })
+  }
+})
+
+// POST /api/vaults/:id/cancel
 vaultsRouter.post('/:id/cancel', authenticate, async (req, res) => {
   const actorUserId = req.user!.userId
   const actorRole = req.user!.role

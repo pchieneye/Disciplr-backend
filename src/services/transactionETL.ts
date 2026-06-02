@@ -1,6 +1,6 @@
 import { Horizon } from '@stellar/stellar-sdk'
 import type { Transaction, HorizonOperation, ETLConfig, VaultReference } from '../types/transactions.js'
-import { db } from '../db/index.js'
+import db from '../db/index.js'
 
 export class TransactionETLService {
   private server: Horizon.Server

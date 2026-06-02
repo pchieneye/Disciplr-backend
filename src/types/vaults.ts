@@ -16,6 +16,8 @@ export interface CreateVaultInput {
   }
   milestones: MilestoneInput[]
   creator?: string
+  /** Grace window in seconds after a milestone dueDate during which check-in is still accepted. Bounded by vault endDate. */
+  lateCheckInWindowSecs?: number
   onChain?: {
     mode?: 'build' | 'submit'
     contractId?: string
@@ -32,6 +34,7 @@ export interface PersistedMilestone {
   dueDate: string
   amount: string
   sortOrder: number
+  verifierUserId: string | null
   createdAt: string
 }
 
@@ -47,6 +50,8 @@ export interface PersistedVault {
   status: 'draft' | 'active' | 'completed' | 'failed' | 'cancelled'
   createdAt: string
   milestones: PersistedMilestone[]
+  /** Grace window in seconds after a milestone dueDate during which check-in is still accepted. Bounded by vault endDate. */
+  lateCheckInWindowSecs: number
 }
 
 export interface VaultCreateResponse {
@@ -64,7 +69,7 @@ export interface VaultCreateResponse {
       attempted: boolean
       status: 'not_requested' | 'not_configured' | 'success' | 'error'
       txHash?: string
-      error?: string
+      error?: string | { code: string; message: string; details?: unknown }
     }
   }
   idempotency: {

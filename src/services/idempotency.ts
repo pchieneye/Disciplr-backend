@@ -1,5 +1,40 @@
 import { Knex } from 'knex'
 import { ParsedEvent } from '../types/horizonSync.js'
+import { createHash } from 'node:crypto'
+
+export class IdempotencyConflictError extends Error {
+  constructor(message = 'Idempotency key conflict') {
+    super(message)
+    this.name = 'IdempotencyConflictError'
+  }
+}
+
+// In-memory store for idempotent responses (replaces DB for now)
+const idempotencyStore = new Map<string, { hash: string; response: unknown }>()
+
+export function hashRequestPayload(body: unknown): string {
+  return createHash('sha256').update(JSON.stringify(body)).digest('hex')
+}
+
+export async function getIdempotentResponse<T>(key: string, hash: string): Promise<T | null> {
+  const entry = idempotencyStore.get(key)
+  if (!entry) return null
+  if (entry.hash !== hash) throw new IdempotencyConflictError()
+  return entry.response as T
+}
+
+export async function saveIdempotentResponse(
+  key: string,
+  hash: string,
+  _id: string,
+  response: unknown
+): Promise<void> {
+  idempotencyStore.set(key, { hash, response })
+}
+
+export function resetIdempotencyStore(): void {
+  idempotencyStore.clear()
+}
 
 /**
  * Idempotency Service

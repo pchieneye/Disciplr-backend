@@ -3,6 +3,8 @@ import express from 'express'
 import helmet from 'helmet'
 import { config } from './config/index.js'
 import { privacyLogger } from './middleware/privacy-logger.js'
+import { adminRouter } from './routes/admin.js'
+import { notificationsRouter } from './routes/notifications.js'
 
 export const app = express()
 
@@ -152,4 +154,12 @@ app.use((_req, res, next) => {
 
 app.use(privacyLogger)
 
-// Routes are mounted in index.ts
+// Core routes mounted here for test compatibility
+app.use('/api/admin', adminRouter)
+import { metricsRouter } from './routes/metrics.js';
+import { requireAdmin } from './middleware/rbac.js';
+
+// Register metrics endpoint with admin guard and rate limiter
+app.use('/api/metrics', requireAdmin, metricsRateLimiter, metricsRouter);
+
+// Additional routes are mounted in index.ts
