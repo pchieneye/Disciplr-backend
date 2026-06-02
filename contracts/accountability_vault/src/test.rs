@@ -1,29 +1,3 @@
-use soroban_sdk::{Env, Vec};
-
-use crate::{AccountabilityVaultContract, ContractError, MAX_MILESTONES, Milestone};
-
-#[test]
-fn create_vault_rejects_more_than_max_milestones() {
-    let env = Env::default();
-    let mut milestones = Vec::new(&env);
-    for _ in 0..(MAX_MILESTONES + 1) {
-        milestones.push_back(Milestone { verified: false });
-    }
-
-    let result = AccountabilityVaultContract::create_vault(env.clone(), milestones);
-    assert_eq!(result, Err(ContractError::TooManyMilestones));
-}
-
-#[test]
-fn create_vault_allows_max_milestones() {
-    let env = Env::default();
-    let mut milestones = Vec::new(&env);
-    for _ in 0..MAX_MILESTONES {
-        milestones.push_back(Milestone { verified: false });
-    }
-
-    let result = AccountabilityVaultContract::create_vault(env.clone(), milestones);
-    assert!(result.is_ok());
 #![cfg(test)]
 
 extern crate std;
@@ -727,3 +701,102 @@ fn test_create_vault_failure_destination_equals_creator_fails() {
         &guardian,
     );
 }
+
+#[test]
+#[should_panic(expected = "Error::DeadlineInPast")]
+fn test_create_vault_deadline_in_past_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+
+    let creator = Address::generate(&env);
+    let verifier = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let success = Address::generate(&env);
+    let failure = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, _) = create_token(&env, &token_admin);
+
+    let contract_id = env.register_contract(None, AccountabilityVault);
+    let contract = AccountabilityVaultClient::new(&env, &contract_id);
+
+    let verifier_set = VerifierSet {
+        verifiers: vec![&env, verifier.clone()],
+        threshold: 1u32,
+    };
+    let milestones = vec![
+        &env,
+        Milestone {
+            title: String::from_str(&env, "m"),
+            amount: 500,
+            due_date: 900,
+            verified: false,
+        },
+    ];
+
+    let vault_id = String::from_str(&env, "v1");
+    contract.create_vault(
+        &vault_id,
+        &creator,
+        &verifier_set,
+        &None,
+        &token,
+        &500,
+        &success,
+        &failure,
+        &900,
+        &milestones,
+        &guardian,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error::InvalidDeadline")]
+fn test_create_vault_milestone_due_date_exceeds_end_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_000);
+
+    let creator = Address::generate(&env);
+    let verifier = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let success = Address::generate(&env);
+    let failure = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+
+    let (token, _) = create_token(&env, &token_admin);
+
+    let contract_id = env.register_contract(None, AccountabilityVault);
+    let contract = AccountabilityVaultClient::new(&env, &contract_id);
+
+    let verifier_set = VerifierSet {
+        verifiers: vec![&env, verifier.clone()],
+        threshold: 1u32,
+    };
+    let milestones = vec![
+        &env,
+        Milestone {
+            title: String::from_str(&env, "m"),
+            amount: 500,
+            due_date: 1_300,
+            verified: false,
+        },
+    ];
+
+    let vault_id = String::from_str(&env, "v1");
+    contract.create_vault(
+        &vault_id,
+        &creator,
+        &verifier_set,
+        &None,
+        &token,
+        &500,
+        &success,
+        &failure,
+        &1_200,
+        &milestones,
+        &guardian,
+    );
+}
+

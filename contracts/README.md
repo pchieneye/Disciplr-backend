@@ -38,6 +38,11 @@ mirrors `PersistedVault.status` in `src/types/vaults.ts`. Emitted events
 `vault_completed`, `vault_cancelled`, `vault_withdrawn`) align with the topics
 consumed by the backend event parser.
 
+### Error Handling & Precise Deadline Errors
+To allow the backend to render precise, unambiguous user-facing errors:
+- **`Error::DeadlineInPast` (28)**: Returned when the configured `end_timestamp` is less than or equal to the current ledger timestamp.
+- **`Error::InvalidDeadline` (4)**: Reserved strictly for structural mismatches (such as a milestone `due_date` exceeding `end_timestamp` or non-monotonic due-date ordering).
+
 ## Build & test
 
 ```bash
