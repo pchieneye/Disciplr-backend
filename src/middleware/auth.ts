@@ -3,7 +3,6 @@ import crypto from 'crypto'
 import jwt from 'jsonwebtoken'
 import { randomUUID } from 'node:crypto'
 import { recordSession, validateSession } from '../services/session.js'
-import { verifyAccessToken, generateAccessToken } from '../lib/auth-utils.js'
 import { UserRole } from '../types/user.js'
 
 import { JWTPayload } from '../types/auth.js'
@@ -12,6 +11,8 @@ export type Role = 'user' | 'verifier' | 'admin'
 
 // Use JWTPayload from types/auth.ts as source of truth, adding jti for sessions
 export type JwtPayload = JWTPayload & { jti?: string }
+
+const JWT_SECRET = process.env.JWT_SECRET ?? 'change-me-in-production'
 
 export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
      const authHeader = req.headers.authorization
@@ -24,11 +25,18 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
      const token = authHeader.slice(7)
 
      try {
-          const payload = verifyAccessToken(token) as JwtPayload
-          
+          const payload = jwt.verify(token, JWT_SECRET) as JwtPayload
+
+          // Reject tokens with iat too far in the future (beyond clock tolerance)
+          const iat = (payload as any).iat as number | undefined
+          if (iat && iat > Math.floor(Date.now() / 1000) + 30) {
+               res.status(401).json({ error: 'Invalid token' })
+               return
+          }
+
           if (payload.jti) {
                const isValid = await validateSession(payload.jti)
-               
+
                if (!isValid) {
                     res.status(401).json({ error: 'Session revoked or expired' })
                     return
@@ -48,6 +56,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
 
 export async function signToken(payload: Omit<JwtPayload, 'jti'>, expiresIn = '1h'): Promise<string> {
      const jti = randomUUID()
+     const fullPayload = { ...payload, jti }
      
      // Calculate expiration date
      // Default matches 1h (1 hour)
@@ -56,7 +65,7 @@ export async function signToken(payload: Omit<JwtPayload, 'jti'>, expiresIn = '1
      
      await recordSession(payload.userId, jti, expiresAt)
      
-     return generateAccessToken({ userId: payload.userId, role: payload.role as string, jti })
+     return jwt.sign(fullPayload, JWT_SECRET, { expiresIn } as jwt.SignOptions)
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -124,4 +133,31 @@ export function verifyDownloadToken(
     } catch {
         return null
     }
+}
+/**
+ * @deprecated Use standard `authenticate` instead. Legacy mock auth for early dev. Tracking removal in #454
+ */
+export const requireUserAuth = (req: Request, res: Response, next: NextFunction): void => {
+    const headerUserId = req.header('x-user-id')?.trim()
+    let bearerUserId = null
+    const authHeader = req.header('authorization')
+    if (authHeader) {
+        const match = /^Bearer\s+(.+)$/i.exec(authHeader)
+        if (match) {
+            const token = match[1].trim()
+            bearerUserId = token.startsWith('user:') ? token.slice(5) : token
+        }
+    }
+    const userId = headerUserId || bearerUserId
+    
+    if (!userId) {
+        res.status(401).json({
+            error: 'Authentication required. Provide x-user-id header or Authorization: Bearer user:<user-id>.',
+        })
+        return
+    }
+    
+    // @ts-ignore - Preserving legacy property assignment
+    req.authUser = { userId }
+    next()
 }

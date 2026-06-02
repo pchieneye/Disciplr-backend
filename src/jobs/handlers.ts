@@ -1,6 +1,7 @@
 import { NotificationService } from '../services/notifications/factory.js'
+import { processJob as processExportJob } from '../services/exportQueue.js'
 import type { JobHandler, JobType } from './types.js'
-import { markVaultExpiries } from '../services/vault.js'
+import { markVaultExpiries } from '../services/vaultExpiry.service.js'
 
 type JobHandlerRegistry = {
   [K in JobType]: JobHandler<K>
@@ -16,13 +17,12 @@ const logJob = (type: JobType, message: string): void => {
   console.log(`[jobs:${type}] ${message}`)
 }
 
-export const defaultJobHandlers: JobHandlerRegistry = {
+export const createDefaultJobHandlers = (
+  notificationService: NotificationService,
+): JobHandlerRegistry => ({
   'notification.send': async (payload, context) => {
-    await NotificationService.send(payload.recipient, payload.subject, payload.body)
-    logJob(
-      'notification.send',
-      `executed job_id=${context.jobId} attempt=${context.attempt}`,
-    )
+    await notificationService.send(payload.recipient, payload.subject, payload.body)
+    logJob('notification.send', `executed job_id=${context.jobId} attempt=${context.attempt}`)
   },
   'deadline.check': async (payload, context) => {
     await sleep(30)
@@ -33,6 +33,13 @@ export const defaultJobHandlers: JobHandlerRegistry = {
       'deadline.check',
       `checked target=${target} deadline=${deadline} expired=${expiredCount} source=${payload.triggerSource} attempt=${context.attempt}`,
     )
+    if (payload.vaultId) {
+      const sorobanPayload = buildSlashOnMissPayload(payload.vaultId)
+      logJob(
+        'deadline.check',
+        `slash_on_miss built vault=${payload.vaultId} status=${sorobanPayload.submission.status}`,
+      )
+    }
   },
   'oracle.call': async (payload, context) => {
     await sleep(60)
@@ -51,4 +58,11 @@ export const defaultJobHandlers: JobHandlerRegistry = {
       `scope=${payload.scope} entity=${entity} reason=${reason} attempt=${context.attempt}`,
     )
   },
-}
+  'export.generate': async (payload, context) => {
+    await processExportJob(payload.exportJobId, undefined, context.attempt)
+    logJob(
+      'export.generate',
+      `exportJobId=${payload.exportJobId} attempt=${context.attempt}`,
+    )
+  },
+})

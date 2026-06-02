@@ -1,31 +1,112 @@
-import { markVaultExpiries } from './vault.js'
+import db from '../db/index.js'
+import { BackgroundJobSystem } from '../jobs/system.js'
+import { getIdempotentResponse, saveIdempotentResponse } from './idempotency.js'
+import { createNotificationService } from './notifications/factory.js'
 
 const BATCH_SIZE = 50
 
 let intervalId: ReturnType<typeof setInterval> | null = null
 
-export const processExpiredVaultsBatch = async (): Promise<number> => {
-  const expiredCount = await markVaultExpiries({ limit: BATCH_SIZE })
-  if (expiredCount > 0) {
-    console.log(`[ExpirationChecker] Failed ${expiredCount} expired vault(s)`)
+// Module-level default job system instance.
+// Tests can inject a different instance via startExpirationChecker's jobSystem param.
+let _defaultJobSystem: BackgroundJobSystem | null = null
+
+const getDefaultJobSystem = (): BackgroundJobSystem => {
+  if (!_defaultJobSystem) {
+    _defaultJobSystem = new BackgroundJobSystem(
+      createNotificationService(process.env.NOTIFICATION_PROVIDER ?? 'console'),
+    )
   }
-  return expiredCount
+  return _defaultJobSystem
 }
 
-export const startExpirationChecker = (intervalMs = 60_000): void => {
+const processExpiredVaultsBatch = async (): Promise<string[]> => {
+  const failed: string[] = []
+
+  try {
+    const expiredVaults = await db('vaults')
+      .where('status', 'active')
+      .where('end_date', '<=', new Date())
+      .limit(BATCH_SIZE)
+
+    if (expiredVaults.length === 0) {
+      return failed
+    }
+
+    for (const vault of expiredVaults) {
+      try {
+        await db('vaults')
+          .where('id', vault.id)
+          .where('status', 'active')
+          .update({ status: 'failed' })
+        failed.push(vault.id)
+      } catch (error) {
+        console.error(`[ExpirationChecker] Failed to mark vault ${vault.id} as failed:`, error)
+      }
+    }
+
+    if (failed.length > 0) {
+      console.log(`[ExpirationChecker] Failed ${failed.length} expired vault(s): ${failed.join(', ')}`)
+    }
+  } catch (error) {
+    console.error('[ExpirationChecker] Error processing expired vaults:', error)
+  }
+
+  return failed
+}
+
+const enqueueSlashJobs = async (expired: string[], jobSystem: BackgroundJobSystem): Promise<void> => {
+  for (const vaultId of expired) {
+    if (process.env.DRY_RUN === 'true') {
+      console.log(`[ExpirationChecker] DRY_RUN: skipping enqueue for vault ${vaultId}`)
+      continue
+    }
+    const idempotencyKey = `slash_on_miss:${vaultId}`
+    const hash = vaultId
+    const existing = await getIdempotentResponse(idempotencyKey, hash)
+    if (existing) continue
+    jobSystem.enqueue('deadline.check', {
+      vaultId,
+      triggerSource: 'expiration-scheduler',
+    }, { maxAttempts: 3 })
+    await saveIdempotentResponse(idempotencyKey, hash, vaultId, { enqueued: true })
+  }
+}
+
+export const startExpirationChecker = (intervalMs = 60_000, jobSystem?: BackgroundJobSystem): void => {
   if (intervalId) return
+
+  const resolvedJobSystem = jobSystem ?? getDefaultJobSystem()
 
   const runCheck = async () => {
     try {
-      await processExpiredVaultsBatch()
+      const expired = await processExpiredVaultsBatch()
+      await enqueueSlashJobs(expired, resolvedJobSystem)
     } catch (error) {
       console.error('[ExpirationChecker] Check failed:', error)
+    } finally {
+      try {
+        const now = new Date()
+        await db('scheduler_heartbeats')
+          .insert({
+            name: 'expiration_scheduler',
+            last_run_at: now,
+          })
+          .onConflict('name')
+          .merge({
+            last_run_at: now,
+          })
+      } catch (error) {
+        console.error('[ExpirationChecker] Failed to record heartbeat:', error)
+      }
     }
   }
 
   runCheck()
 
-  intervalId = setInterval(runCheck, intervalMs)
+  intervalId = setInterval(async () => {
+    await runCheck()
+  }, intervalMs)
   intervalId.unref()
 }
 

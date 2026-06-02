@@ -9,6 +9,8 @@ import { authRouter } from './routes/auth.js'
 import { analyticsRouter } from './routes/analytics.js'
 import { healthRateLimiter, vaultsRateLimiter } from './middleware/rateLimiter.js'
 import { createExportRouter } from './routes/exports.js'
+import { configureExportJobRepository, createKnexExportJobRepository } from './services/exportQueue.js'
+import { db } from './db/index.js'
 import { transactionsRouter } from './routes/transactions.js'
 import { privacyRouter } from './routes/privacy.js'
 import { milestonesRouter } from './routes/milestones.js'
@@ -20,23 +22,37 @@ import { adminVerifiersRouter } from './routes/adminVerifiers.js'
 import { verificationsRouter } from './routes/verifications.js'
 import { apiKeysRouter } from './routes/apiKeys.js'
 import { notificationsRouter } from './routes/notifications.js'
+import { withRequestPrisma } from './middleware/withRequestPrisma.js'
 import {
   securityMetricsMiddleware,
   securityRateLimitMiddleware,
 } from './security/abuse-monitor.js'
+import inFlightMiddleware from './middleware/inFlightRequests.js'
 
-export function bootstrapApp() {
-  const jobSystem = new BackgroundJobSystem()
+type BootstrapOptions = {
+  notificationService?: NotificationService
+  notificationProviderName?: string
+}
+
+export function bootstrapApp(options: BootstrapOptions = {}) {
+  const notificationService =
+    options.notificationService ??
+    createNotificationService(options.notificationProviderName ?? process.env.NOTIFICATION_PROVIDER ?? 'console')
+  const jobSystem = new BackgroundJobSystem(notificationService)
+  configureExportJobRepository(createKnexExportJobRepository(db))
 
   app.use(securityMetricsMiddleware)
   app.use(securityRateLimitMiddleware)
+  // Track in-flight requests for graceful shutdown
+  app.use(inFlightMiddleware)
+  app.use(withRequestPrisma)
 
   app.use('/api/health', healthRateLimiter, createHealthRouter(jobSystem))
   app.use('/api/jobs', createJobsRouter(jobSystem))
   app.use('/api/vaults', vaultsRateLimiter, vaultsRouter)
   app.use('/api/vaults/:vaultId/milestones', milestonesRouter)
   app.use('/api/auth', authRouter)
-  app.use('/api/exports', createExportRouter([]))
+  app.use('/api/exports', createExportRouter(jobSystem))
   app.use('/api/transactions', transactionsRouter)
   app.use('/api/analytics', analyticsRouter)
   app.use('/api/privacy', privacyRouter)

@@ -1,6 +1,11 @@
-import { defaultJobHandlers } from './handlers.js'
+import { createDefaultJobHandlers } from './handlers.js'
 import { InMemoryJobQueue, type QueueMetrics, type QueuedJobReceipt } from './queue.js'
 import { type EnqueueOptions, type JobPayloadByType, type JobType } from './types.js'
+import { recoverPendingExportJobs } from '../services/exportQueue.js'
+import {
+  createNotificationService,
+  type NotificationService,
+} from '../services/notifications/factory.js'
 
 const parsePositiveInteger = (value: string | undefined, fallback: number): number => {
   if (!value) {
@@ -21,17 +26,21 @@ export class BackgroundJobSystem {
   private started = false
   private shuttingDown = false
 
-  constructor() {
+  constructor(notificationService?: NotificationService) {
     this.queue = new InMemoryJobQueue({
       concurrency: parsePositiveInteger(process.env.JOB_WORKER_CONCURRENCY, 2),
       pollIntervalMs: parsePositiveInteger(process.env.JOB_QUEUE_POLL_INTERVAL_MS, 250),
       historyLimit: parsePositiveInteger(process.env.JOB_HISTORY_LIMIT, 50),
     })
+    const resolvedNotificationService =
+      notificationService ?? createNotificationService(process.env.NOTIFICATION_PROVIDER ?? 'console')
+    const handlers = createDefaultJobHandlers(resolvedNotificationService)
 
-    this.queue.registerHandler('notification.send', defaultJobHandlers['notification.send'])
-    this.queue.registerHandler('deadline.check', defaultJobHandlers['deadline.check'])
-    this.queue.registerHandler('oracle.call', defaultJobHandlers['oracle.call'])
-    this.queue.registerHandler('analytics.recompute', defaultJobHandlers['analytics.recompute'])
+    this.queue.registerHandler('notification.send', handlers['notification.send'])
+    this.queue.registerHandler('deadline.check', handlers['deadline.check'])
+    this.queue.registerHandler('oracle.call', handlers['oracle.call'])
+    this.queue.registerHandler('analytics.recompute', handlers['analytics.recompute'])
+    this.queue.registerHandler('export.generate', handlers['export.generate'])
   }
 
   start(): void {
@@ -43,6 +52,10 @@ export class BackgroundJobSystem {
     this.shuttingDown = false
     this.queue.start()
     this.scheduleRecurringJobs()
+    void recoverPendingExportJobs(this).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[jobs:export.generate] failed to recover pending exports: ${message}`)
+    })
   }
 
   async stop(): Promise<void> {
@@ -64,6 +77,28 @@ export class BackgroundJobSystem {
       throw new Error('Cannot enqueue job: system is shutting down')
     }
     return this.queue.enqueue(type, payload, options)
+  }
+
+  getDeadLetters() {
+    return this.queue.getDeadLetters()
+  }
+
+  getDeadLetter(jobId: string) {
+    return this.queue.getDeadLetter(jobId)
+  }
+
+  replayDeadLetter(jobId: string): QueuedJobReceipt<JobType> {
+    if (this.shuttingDown) {
+      throw new Error('Cannot replay dead-letter job: system is shutting down')
+    }
+    return this.queue.replayDeadLetter(jobId)
+  }
+
+  retryJob(jobId: string, force: boolean = false): QueuedJobReceipt<JobType> {
+    if (this.shuttingDown) {
+      throw new Error('Cannot retry job: system is shutting down')
+    }
+    return this.queue.retryJob(jobId, force)
   }
 
   getMetrics(): QueueMetrics {
