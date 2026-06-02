@@ -218,3 +218,63 @@ Location: `accountability_vault/src/lib.rs` — `AccountabilityVault::reclaim_af
 ### License
 
 See main repository license file.
+
+---
+
+## Ledger Snapshot Workflow
+
+The `accountability_vault` test suite writes JSON ledger snapshots to
+`test_snapshots/test/` via `soroban_sdk`'s snapshot infrastructure. These
+committed files serve as golden references so that any unintended change to
+contract behaviour is caught automatically in CI.
+
+### How it works
+
+`scripts/check_snapshots.sh` does the following:
+
+1. Runs `cargo test` with `SOROBAN_TEST_SNAPSHOT_DIR` pointing at a temporary
+   directory so that fresh snapshots are written there instead of the working
+   tree.
+2. In **check mode** (default): diffs the fresh snapshots against the committed
+   `test_snapshots/` directory. Any difference causes the script — and the CI
+   job — to fail with a clear diff printed to the log.
+3. In **regen mode**: copies the fresh snapshots back into the working tree so
+   that they can be reviewed and committed.
+
+### Checking for drift locally
+
+```bash
+cd contracts/accountability_vault
+bash scripts/check_snapshots.sh
+```
+
+A clean run prints `OK: snapshots are stable — no drift detected.` and exits 0.
+A drifted run prints the changed files and exits 1.
+
+### Regenerating snapshots after an intentional change
+
+When you change contract logic and the resulting ledger state is expected to
+differ, regenerate the golden files:
+
+```bash
+cd contracts/accountability_vault
+REGEN=1 bash scripts/check_snapshots.sh
+```
+
+Then review the diff, confirm every change is intentional, and commit the
+updated snapshots together with your code change:
+
+```bash
+git diff contracts/accountability_vault/test_snapshots/
+git add contracts/accountability_vault/test_snapshots/
+git commit -m "test: update ledger snapshots for <your change>"
+```
+
+### CI enforcement
+
+The `snapshot-check` job in `.github/workflows/ci.yml` runs on every push and
+pull-request to `main`. It is independent of the Node.js test job, so a
+snapshot regression will block merging even if all TypeScript tests pass.
+
+If CI fails with *SNAPSHOT DRIFT DETECTED*, pull the branch locally and run
+the regen command above, then push the updated snapshots.
