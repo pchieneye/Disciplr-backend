@@ -99,18 +99,22 @@ export const createAuditLog = async (
   }
 
   // Insert into database
-  const [insertedLog] = await db('audit_logs')
-    .insert({
-      id: auditLog.id,
-      actor_user_id: auditLog.actor_user_id,
-      organization_id: auditLog.organization_id ?? null,
-      action: auditLog.action,
-      target_type: auditLog.target_type,
-      target_id: auditLog.target_id,
-      metadata: auditLog.metadata,
-      created_at: auditLog.created_at,
-    })
-    .returning('*')
+  const insertPayload: Record<string, unknown> = {
+    id: auditLog.id,
+    actor_user_id: auditLog.actor_user_id,
+    action: auditLog.action,
+    target_type: auditLog.target_type,
+    target_id: auditLog.target_id,
+    metadata: auditLog.metadata,
+    created_at: auditLog.created_at,
+  }
+
+  // Only include organization_id when explicitly provided to avoid failing on older schemas
+  if (typeof auditLog.organization_id !== 'undefined') {
+    insertPayload.organization_id = auditLog.organization_id
+  }
+
+  const [insertedLog] = await db('audit_logs').insert(insertPayload).returning('*')
 
   return insertedLog
 }

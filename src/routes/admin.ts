@@ -113,6 +113,10 @@ adminRouter.get(
     if (req.query.target_id) {
       countQuery = countQuery.where('target_id', getStringQuery(req.query.target_id))
     }
+    // Include organization filter when provided via validated queryParser filters
+    if ((req.filters as any)?.organization_id) {
+      countQuery = countQuery.where('organization_id', (req.filters as any).organization_id)
+    }
     
     const [{ total }] = await countQuery
     const totalCount = parseInt(total as string)
