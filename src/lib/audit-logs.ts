@@ -1,4 +1,5 @@
 import { db } from '../db/knex.js'
+import type { Knex } from 'knex'
 
 export type AuditLogMetadata = Record<string, unknown>
 
@@ -73,7 +74,10 @@ const sanitizeMetadata = (metadata: Record<string, unknown> = {}): AuditLogMetad
   return normalized
 }
 
-export const createAuditLog = async (entry: Omit<AuditLog, 'id' | 'created_at'>): Promise<AuditLog> => {
+export const createAuditLog = async (
+  entry: Omit<AuditLog, 'id' | 'created_at'>,
+  trx?: Knex.Transaction,
+): Promise<AuditLog> => {
   if (!entry.actor_user_id || !entry.action || !entry.target_type || !entry.target_id) {
     throw new Error('Invalid audit log entry: missing required fields')
   }
@@ -95,8 +99,8 @@ export const createAuditLog = async (entry: Omit<AuditLog, 'id' | 'created_at'>)
     metadata: normalizedMetadata,
   }
 
-  // Insert into database
-  const [insertedLog] = await db('audit_logs')
+  const client = trx ?? db
+  const [insertedLog] = await client('audit_logs')
     .insert({
       id: auditLog.id,
       actor_user_id: auditLog.actor_user_id,
