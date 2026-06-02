@@ -64,34 +64,26 @@ addresses from the verifier set (or the optional oracle) have approved it.
 - The threshold must be ≥ 1 and ≤ `verifiers.len()`; otherwise `create_vault` returns
   `Error::InvalidThreshold`.
 
-### Vault State Machine
+#### Evidence Hash Binding
 
+`check_in` accepts an `evidence_hash: BytesN<32>` parameter — a 32-byte digest (e.g.
+SHA-256) of the off-chain evidence artifact (document, IPFS CID, etc.). When the
+approval threshold is reached, the hash is persisted alongside the check-in timestamp
+under `DataKey::CheckIn(index)` as a `(u64, BytesN<32>)` tuple and emitted in the
+`milestone_checked_in` event value so that the on-chain record is cryptographically bound
+to the off-chain evidence.
+
+```rust
+// event topics: ("milestone_checked_in", caller, source)
+// event value:  (milestone_index, evidence_hash)
+env.events().publish(
+    (String::from_str(&env, "milestone_checked_in"), caller, source),
+    (milestone_index, evidence_hash),
+);
 ```
-Draft ──stake──► Active ──admin_dispute──► Disputed
-  │                │                          │
-  │          claim/slash/withdraw         admin_resolve
-  │                │                      ↙    ↓    ↘
-  │           Completed               Active Completed Failed
-  │           Failed
-  └──withdraw──► Cancelled
-```
 
-Valid transitions:
-
-| From | To | Trigger |
-|------|-----|---------|
-| `Draft` | `Active` | `stake` / `stake_from` |
-| `Draft` | `Cancelled` | `withdraw` |
-| `Active` | `Completed` | `claim` (all milestones verified) |
-| `Active` | `Failed` | `slash_on_miss` (deadline passed) |
-| `Active` | `Cancelled` | `withdraw` (no check-ins yet) |
-| `Active` | `Disputed` | `admin_dispute` (guardian only) |
-| `Disputed` | `Active` | `admin_resolve` (guardian only) |
-| `Disputed` | `Completed` | `admin_resolve` (guardian only) |
-| `Disputed` | `Failed` | `admin_resolve` (guardian only) |
-
-`Completed`, `Failed`, and `Cancelled` are terminal states. `Disputed` is a non-terminal
-hold that blocks `slash_on_miss` and `claim` until the guardian resolves it.
+The backend `submitCheckIn(vaultId, milestoneId, evidenceHash)` passes the hex-encoded
+hash, which is decoded to `BytesN<32>` before calling the contract.
 
 ### Arithmetic Safety
 
