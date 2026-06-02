@@ -98,6 +98,13 @@ hold that blocks `slash_on_miss` and `claim` until the guardian resolves it.
 The `create_vault` function validates that milestone amounts are positive and sum exactly to
 the declared `amount`, rejecting mismatches with `Error::AmountMismatch`.
 
+### Checked Milestone Access
+
+Contract code must not use `unwrap()` when reading milestones by caller-supplied indexes.
+Even when a nearby bounds check exists, use checked access such as
+`vault.milestones.get(index).ok_or(Error::MilestoneIndexOutOfRange)?` so future
+refactors continue to return typed contract errors instead of risking host-level panics.
+
 ### Error Types
 
 | Code | Name | Meaning |
