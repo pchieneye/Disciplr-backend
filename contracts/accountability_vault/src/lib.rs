@@ -99,6 +99,8 @@ pub enum Error {
     AlreadyInitialized = 1,
     /// No vault found for the given `vault_id`.
     NotInitialized = 2,
+    /// Creator and verifier are the same address; role separation is required.
+    CreatorIsVerifier = 26,
     /// Amount is zero or negative.
     InvalidAmount = 3,
     /// Deadline is in the past, exceeds vault end, or beyond the 5-year horizon.

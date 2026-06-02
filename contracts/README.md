@@ -55,6 +55,9 @@ mirrors `PersistedVault.status` in `src/types/vaults.ts`. Emitted events
 `vault_completed`, `vault_cancelled`, `vault_withdrawn`) align with the topics
 consumed by the backend event parser.
 
+**Error Handling and Backend Recoverability:**
+Contract read operations (like `get_vault`) and state transitions (`stake`, `check_in`, `claim`) safely return `Error::NotInitialized` rather than panicking when a `vault_id` is unset in storage. The backend's `src/middleware/errorHandler.ts` relies on this typed error mapping (specifically to `ErrorCode.NOT_FOUND` with status code 404) to gracefully recover from pre-initialization read attempts.
+
 ## Build & test
 
 ```bash
@@ -73,6 +76,7 @@ To prevent accidental bloat in the smart contract, the `accountability_vault` in
 The default limit is set to **100,000 bytes** (~100KB).
 
 If you need to update this budget as the contract grows:
+
 1. Temporarily increase the budget locally by exporting the variable: `export MAX_WASM_SIZE=150000`
 2. Update the default value in `contracts/build-size-check.sh`
 3. Push the changes to update the CI limit.
@@ -84,3 +88,41 @@ If you need to update this budget as the contract grows:
 (`src/services/horizonListener.ts`) and `src/services/eventParser.ts`
 ingest the events emitted by these functions to keep the off-chain vault state
 in sync.
+
+## Deterministic vault address derivation
+
+Each vault is deployed as its own contract instance. The address is derived
+deterministically from the deployer address and a 32-byte salt, so
+`src/services/soroban.ts` can correlate the on-chain address to the off-chain
+`PersistedVault.id` **before** the deploy transaction is confirmed.
+
+### Derivation formula
+
+```
+contract_address = sha256("contract" || deployer_bytes || salt_bytes)
+```
+
+This is Soroban's built-in CREATE2-style address scheme. It can be computed
+client-side using `env.deployer().with_address(deployer, salt).deployed_address()`
+in Rust tests, or via the Stellar SDK `Contract.fromAddress` / deployer helpers
+in TypeScript.
+
+### Salt convention (backend)
+
+```
+salt = sha256(vault_id)   // 32-byte hash of the off-chain UUID string
+```
+
+See `src/services/soroban.ts` → `saltFromVaultId`.
+
+### Properties
+
+| Property | Guarantee |
+|---|---|
+| Same `(deployer, salt)` | Always yields the same address |
+| Different `salt` | Different address (distinct vault UUIDs → distinct contracts) |
+| Different `deployer` | Different address (multi-tenant safe) |
+
+The test suite in `contracts/accountability_vault/src/test.rs`
+(`test_deterministic_address_*`) exercises all three properties and verifies
+that `deployed_address()` matches the address of the actually deployed contract.

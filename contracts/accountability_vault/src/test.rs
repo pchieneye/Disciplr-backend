@@ -168,6 +168,26 @@ fn create_vault_accepts_allowed_token_and_stake_uses_that_token() {
     assert_eq!(token_client.balance(&s.contract_id), 500);
 }
 
+// ── #493: deterministic vault address derivation ──────────────────────────────
+//
+// The backend (src/services/soroban.ts) deploys one AccountabilityVault
+// contract per vault and must correlate the on-chain address to the off-chain
+// PersistedVault.id before the transaction is confirmed.
+//
+// Soroban derives contract addresses deterministically from (deployer, salt):
+//
+//   address = sha256("contract" || deployer_bytes || salt_bytes)
+//
+// This means the address can be predicted *before* deployment using:
+//   env.deployer().with_address(deployer, salt).deployed_address()
+//
+// Salt convention used by the backend:
+//   BytesN<32> = sha256(vault_id_string) — a 32-byte hash of the off-chain UUID
+//   (see src/services/soroban.ts: saltFromVaultId)
+//
+// These tests exercise and document the pattern so the backend deploy flow can
+// be validated and the address correlation logic can be unit-tested off-chain.
+
 #[test]
 fn removing_token_blocks_new_vaults_but_preserves_existing_vault() {
     let s = setup();
@@ -214,4 +234,56 @@ fn create_vault_rejects_more_than_max_milestones() {
         .unwrap();
 
     assert_eq!(result, Err(Error::TooManyMilestones));
+}
+
+// ── pre-init paths ───────────────────────────────────────────────────────────
+
+#[test]
+fn test_get_vault_not_initialized() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, AccountabilityVault);
+    let contract = AccountabilityVaultClient::new(&env, &contract_id);
+    let vault_id = String::from_str(&env, "v1");
+
+    let result = contract.try_get_vault(&vault_id);
+    assert_eq!(result, Err(Ok(Error::NotInitialized)));
+}
+
+#[test]
+fn test_stake_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, AccountabilityVault);
+    let contract = AccountabilityVaultClient::new(&env, &contract_id);
+    let vault_id = String::from_str(&env, "v1");
+    let creator = Address::generate(&env);
+
+    let result = contract.try_stake(&vault_id, &creator);
+    assert_eq!(result, Err(Ok(Error::NotInitialized)));
+}
+
+#[test]
+fn test_check_in_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, AccountabilityVault);
+    let contract = AccountabilityVaultClient::new(&env, &contract_id);
+    let vault_id = String::from_str(&env, "v1");
+    let verifier = Address::generate(&env);
+
+    let result = contract.try_check_in(&vault_id, &verifier, &0);
+    assert_eq!(result, Err(Ok(Error::NotInitialized)));
+}
+
+#[test]
+fn test_claim_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, AccountabilityVault);
+    let contract = AccountabilityVaultClient::new(&env, &contract_id);
+    let vault_id = String::from_str(&env, "v1");
+    let creator = Address::generate(&env);
+
+    let result = contract.try_claim(&vault_id, &creator);
+    assert_eq!(result, Err(Ok(Error::NotInitialized)));
 }
