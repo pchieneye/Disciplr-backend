@@ -49,19 +49,44 @@ All environment variables are validated at startup using `src/config/env.ts`. If
 | `JOB_WORKER_CONCURRENCY` | 2 | Number of concurrent job workers. |
 | `JOB_QUEUE_POLL_INTERVAL_MS` | 250 | How often the job queue checks for new work. |
 | `JOB_HISTORY_LIMIT` | 50 | Number of completed/failed jobs to keep in memory metrics. |
+| `DATABASE_URL` | - | PostgreSQL connection URL. |
+| `JWT_SECRET` | - | Secret for signing JWTs. |
 
-## Docker images & healthchecks
+## Structured Abuse Category Taxonomy (#467)
 
-- Dockerfile: A multi-stage, Node 20 (alpine) image is provided at the repository root. It sets `WORKDIR /app` and runs the container as the non-root `node` user for improved security.
-- Healthcheck: The `docker-compose.yml` now declares a `backend` service with a `healthcheck` that calls `/api/health`. The Postgres `db` service also has a readiness check. Compose `depends_on` is configured so `backend` will wait for `db` to be healthy.
+The abuse monitor now emits structured `security.abuse_detected` events instead of free-form strings, enabling downstream aggregation by anomaly class.
 
-Validation (recommended in CI):
+### Categories
 
-```bash
-docker compose build && docker compose up --wait
+| Category | Trigger | Key fields |
+|---|---|---|
+| `brute-force` | `failed_login_burst` pattern | `failedLoginCount`, `windowMs` |
+| `enumeration` | `endpoint_scan` pattern | `notFoundCount`, `distinctPathCount`, `windowMs` |
+| `payload-anomaly` | `repeated_bad_requests` pattern | `badRequestCount`, `windowMs` |
+| `rate-limit-trip` | `high_volume` pattern | `requestCount`, `windowMs` |
+
+### Admin endpoint
+
+`GET /api/admin/abuse/category-counts` (admin token required) returns a snapshot of per-category counts:
+
+```json
+{
+  "data": {
+    "brute-force": 3,
+    "enumeration": 1,
+    "payload-anomaly": 0,
+    "rate-limit-trip": 2
+  }
+}
 ```
 
-Notes:
-- The runtime image includes `curl` so the healthcheck can probe the HTTP endpoint.
-- CI should run the `docker compose up --wait` step to ensure service health ordering behaves as expected.
+### Log format
 
+```json
+{
+  "event": "security.suspicious_pattern",
+  "ip": "1.2.3.4",
+  "category": { "type": "brute-force", "failedLoginCount": 6, "windowMs": 900000 },
+  "alertCooldownMs": 300000
+}
+```

@@ -18,6 +18,7 @@ import {
 } from '../services/featureFlags.js'
 import { pool } from '../db/index.js'
 import { db } from '../db/knex.js'
+import { getAbuseCategoryCounts } from '../security/abuse-monitor.js'
 
 export const adminRouter = Router()
 
@@ -506,95 +507,10 @@ adminRouter.get('/db/metrics', metricsRateLimiter, async (req: Request, res: Res
 })
 
 /**
- * Get all feature flags for an organization
- * GET /api/admin/flags
- * Query params: ?orgId=... (optional, defaults to global flags)
+ * GET /api/admin/abuse/category-counts
+ * Returns per-category abuse event counts (brute-force, enumeration, payload-anomaly, rate-limit-trip).
+ * Admin only.
  */
-adminRouter.get('/flags', async (req: Request, res: Response) => {
-  try {
-    const orgId = typeof req.query.orgId === 'string' ? req.query.orgId : null
-
-    const flags = await getAllFlags(orgId)
-
-    res.status(200).json({
-      data: {
-        orgId: orgId || 'global',
-        flags,
-        timestamp: new Date().toISOString(),
-      },
-    })
-  } catch (error) {
-    console.error('Error retrieving feature flags:', error)
-    res.status(500).json({ error: 'Failed to retrieve feature flags' })
-  }
-})
-
-/**
- * Set feature flag for an organization
- * PATCH /api/admin/flags/:name
- * Body: { enabled: boolean, orgId?: string }
- *
- * Examples:
- * - Enable global flag: PATCH /api/admin/flags/ENTERPRISE_ANALYTICS { enabled: true }
- * - Enable org-specific: PATCH /api/admin/flags/ENTERPRISE_ANALYTICS { enabled: true, orgId: "org-123" }
- */
-adminRouter.patch('/flags/:name', async (req: Request, res: Response) => {
-  try {
-    const { name } = req.params
-    const { enabled, orgId } = req.body
-
-    // Validate enabled is boolean
-    if (typeof enabled !== 'boolean') {
-      return res.status(400).json({
-        error: 'Invalid request body',
-        details: 'enabled must be a boolean',
-      })
-    }
-
-    // Validate flag name exists in enum
-    if (!isValidFeatureFlag(name)) {
-      return res.status(400).json({
-        error: 'Invalid feature flag name',
-        details: `Unknown flag: ${name}. Valid flags: ${Object.values(FeatureFlag).join(', ')}`,
-      })
-    }
-
-    // Validate orgId is string or undefined
-    if (orgId !== undefined && typeof orgId !== 'string') {
-      return res.status(400).json({
-        error: 'Invalid request body',
-        details: 'orgId must be a string or omitted',
-      })
-    }
-
-    // Set the flag
-    const result = await setFlag(name, orgId || null, enabled)
-
-    // Audit log the change
-    await createAuditLog({
-      actor_user_id: req.user!.userId,
-      action: 'admin.feature_flag.update',
-      target_type: 'feature_flag',
-      target_id: `${name}:${orgId || 'global'}`,
-      metadata: {
-        flag_name: name,
-        org_id: orgId || null,
-        enabled: result,
-        previous_value: undefined, // Would require querying before change, can be added later
-        timestamp: new Date().toISOString(),
-      },
-    })
-
-    res.status(200).json({
-      data: {
-        flag: name,
-        orgId: orgId || 'global',
-        enabled: result,
-        timestamp: new Date().toISOString(),
-      },
-    })
-  } catch (error) {
-    console.error('Error updating feature flag:', error)
-    res.status(500).json({ error: 'Failed to update feature flag' })
-  }
+adminRouter.get('/abuse/category-counts', authorize, requireAdmin, (req: Request, res: Response) => {
+  res.status(200).json({ data: getAbuseCategoryCounts() })
 })
