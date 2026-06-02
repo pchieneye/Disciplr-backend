@@ -75,6 +75,7 @@ const mapVaultRow = (row: {
   creator: string | null;
   status: PersistedVault["status"];
   created_at: string;
+  late_check_in_window_secs?: number | null;
 }): Omit<PersistedVault, "milestones"> => ({
   id: row.id,
   amount: row.amount,
@@ -86,6 +87,7 @@ const mapVaultRow = (row: {
   creator: row.creator,
   status: row.status,
   createdAt: row.created_at,
+  lateCheckInWindowSecs: row.late_check_in_window_secs ?? 0,
 });
 
 export const createVaultWithMilestones = async (
@@ -107,6 +109,7 @@ export const createVaultWithMilestones = async (
       dueDate: milestone.dueDate,
       amount: milestone.amount,
       sortOrder: index,
+      verifierUserId: input.verifier, // Assign the vault's verifier to each milestone
       createdAt: now,
     }),
   );
@@ -124,6 +127,7 @@ export const createVaultWithMilestones = async (
       status: "draft",
       createdAt: now,
       milestones,
+      lateCheckInWindowSecs: input.lateCheckInWindowSecs ?? 0,
     };
     memoryVaults.push(vault);
     memoryVaultRevisions.set(vault.id, 0);
@@ -146,11 +150,12 @@ export const createVaultWithMilestones = async (
       creator: string | null;
       status: PersistedVault["status"];
       created_at: string;
+      late_check_in_window_secs: number | null;
     }>(
       `INSERT INTO vaults
-        (id, amount, start_date, end_date, verifier, success_destination, failure_destination, creator, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft')
-        RETURNING id, amount::text, start_date, end_date, verifier, success_destination, failure_destination, creator, status, created_at`,
+        (id, amount, start_date, end_date, verifier, success_destination, failure_destination, creator, status, late_check_in_window_secs)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9)
+        RETURNING id, amount::text, start_date, end_date, verifier, success_destination, failure_destination, creator, status, created_at, late_check_in_window_secs`,
       [
         vaultId,
         input.amount,
@@ -160,14 +165,15 @@ export const createVaultWithMilestones = async (
         input.destinations.success,
         input.destinations.failure,
         input.creator ?? null,
+        input.lateCheckInWindowSecs ?? 0,
       ],
     );
 
     for (const milestone of milestones) {
       await client.query(
         `INSERT INTO milestones
-          (id, vault_id, title, description, due_date, amount, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          (id, vault_id, title, description, due_date, amount, sort_order, verifier_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           milestone.id,
           milestone.vaultId,
@@ -176,6 +182,7 @@ export const createVaultWithMilestones = async (
           milestone.dueDate,
           milestone.amount,
           milestone.sortOrder,
+          milestone.verifierUserId,
         ],
       );
     }
@@ -222,8 +229,9 @@ export const listVaults = async (): Promise<PersistedVault[]> => {
     creator: string | null;
     status: PersistedVault["status"];
     created_at: string;
+    late_check_in_window_secs: number | null;
   }>(
-    "SELECT id, amount::text, start_date, end_date, verifier, success_destination, failure_destination, creator, status, created_at FROM vaults ORDER BY created_at DESC",
+    "SELECT id, amount::text, start_date, end_date, verifier, success_destination, failure_destination, creator, status, created_at, late_check_in_window_secs FROM vaults ORDER BY created_at DESC",
   );
 
   const milestoneRows = await pool.query<{
@@ -233,10 +241,9 @@ export const listVaults = async (): Promise<PersistedVault[]> => {
     description: string | null;
     due_date: string;
     amount: string;
-    sort_order: number;
-    created_at: string;
+    sort_order: number;    verifier_user_id: string | null;    created_at: string;
   }>(
-    "SELECT id, vault_id, title, description, due_date, amount::text, sort_order, created_at FROM milestones ORDER BY sort_order ASC",
+    "SELECT id, vault_id, title, description, due_date, amount::text, sort_order, verifier_user_id, created_at FROM milestones ORDER BY sort_order ASC",
   );
 
   const milestonesByVault = new Map<string, PersistedMilestone[]>();
@@ -249,6 +256,7 @@ export const listVaults = async (): Promise<PersistedVault[]> => {
       dueDate: milestone.due_date,
       amount: milestone.amount,
       sortOrder: milestone.sort_order,
+      verifierUserId: milestone.verifier_user_id,
       createdAt: milestone.created_at,
     };
 
@@ -271,6 +279,7 @@ export const listVaults = async (): Promise<PersistedVault[]> => {
     creator: string | null;
     status: PersistedVault["status"];
     created_at: string;
+    late_check_in_window_secs: number | null;
   }> = vaultRows.rows;
 
   return rows.map((row) => ({
@@ -340,7 +349,7 @@ export const updateVaultById = async (
     UPDATE vaults
     SET ${setParts.join(", ")}
     WHERE id = $1 AND xmin::text = $2
-    RETURNING id, amount::text, start_date, end_date, verifier, success_destination, failure_destination, creator, status, created_at
+    RETURNING id, amount::text, start_date, end_date, verifier, success_destination, failure_destination, creator, status, created_at, late_check_in_window_secs
   `;
   const result = await executor.query(query, [id, revision, ...values]);
 
@@ -357,9 +366,10 @@ export const updateVaultById = async (
     due_date: string;
     amount: string;
     sort_order: number;
+    verifier_user_id: string | null;
     created_at: string;
   }>(
-    "SELECT id, vault_id, title, description, due_date, amount::text, sort_order, created_at FROM milestones WHERE vault_id = $1 ORDER BY sort_order ASC",
+    "SELECT id, vault_id, title, description, due_date, amount::text, sort_order, verifier_user_id, created_at FROM milestones WHERE vault_id = $1 ORDER BY sort_order ASC",
     [id],
   );
 
@@ -372,6 +382,7 @@ export const updateVaultById = async (
       dueDate: milestone.due_date,
       amount: milestone.amount,
       sortOrder: milestone.sort_order,
+      verifierUserId: milestone.verifier_user_id,
       createdAt: milestone.created_at,
     }),
   );
