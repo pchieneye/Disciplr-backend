@@ -229,11 +229,16 @@ export class SorobanService {
 ingest the events emitted by these functions to keep the off-chain vault state
 in sync.
 
-## Internal Helpers
+## Upgrade & Dependency Pinning Policy
 
-The contract includes several optimized internal helper functions to guarantee security, modularity, and easy auditability:
+To ensure deterministic builds and avoid silent feature or semantic changes between local development, staging environments, and CI, `soroban-sdk` is strictly pinned to an exact minor/patch version in the workspace root `contracts/Cargo.toml`:
+```toml
+[workspace.dependencies]
+soroban-sdk = "=23.0.1"
+```
 
-| Helper | Purpose |
-|---|---|
-| `assert_active(&Vault)` | Centralizes repeated state validation checks for `Active` vaults in `slash_on_miss`, `claim`, and `withdraw`, making future status lifecycle additions single-point-of-change updates. |
+### Dependency Bump Guidelines:
+1. **Deliberate upgrades only**: Never use caret (`^`) or generic major-only ranges (`"23"`) for key core compiler/SDK crates like `soroban-sdk`.
+2. **Review release changelogs**: Ensure you review Soroban SDK changelogs before upgrading to check for changes in host functions, resource budgets, or gas/memory metering.
+3. **Regenerate lockfile**: When changing the pinned version, run `cargo update` inside the `contracts` directory to strictly lock dependencies and refresh `contracts/Cargo.lock`.
 
