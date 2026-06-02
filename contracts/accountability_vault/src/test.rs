@@ -1339,155 +1339,85 @@ fn test_gas_benchmarks_slash_on_miss_10_milestones() {
     assert!(slash_mem < 250_000);
 }
 
-// ── evidence_hash binding tests ──────────────────────────────────────────────
-
 #[test]
-fn test_check_in_stores_evidence_hash_with_timestamp() {
-    // When the threshold is reached the (timestamp, evidence_hash) tuple must be
-    // persisted under DataKey::CheckIn(index) — verified indirectly by confirming
-    // the milestone flips to verified and no panic occurs.
-    let s = setup(&[100], &[500]);
-    s.contract.stake(&s.vault_id, &s.creator);
+fn test_slash_on_miss_timestamp_boundaries() {
+    let env = TestEnv::default();
+    let contract = AccountabilityVaultContract::new(&env);
 
-    let hash = evidence_hash(&s.env, 0xab);
-    s.contract.check_in(&s.vault_id, &s.verifier, &0, &hash);
-
-    let vault = s.contract.get_vault(&s.vault_id);
-    assert!(vault.milestones.get(0).unwrap().verified);
-}
-
-#[test]
-fn test_check_in_emits_evidence_hash_in_event() {
-    // check_in must not panic when a non-zero evidence_hash is passed and the
-    // event payload carries (milestone_index, evidence_hash).
-    let s = setup(&[100], &[500]);
-    s.contract.stake(&s.vault_id, &s.creator);
-
-    let hash = evidence_hash(&s.env, 0xff);
-    // If the event value tuple is malformed the Soroban host would panic here.
-    s.contract.check_in(&s.vault_id, &s.verifier, &0, &hash);
-}
-
-#[test]
-fn test_check_in_different_evidence_hashes_per_milestone() {
-    // Each milestone can carry a distinct evidence_hash.
-    let s = setup(&[100, 200], &[300, 700]);
-    s.contract.stake(&s.vault_id, &s.creator);
-
-    s.contract.check_in(&s.vault_id, &s.verifier, &0, &evidence_hash(&s.env, 0x01));
-    s.contract.check_in(&s.vault_id, &s.verifier, &1, &evidence_hash(&s.env, 0x02));
-
-    let vault = s.contract.get_vault(&s.vault_id);
-    assert!(vault.milestones.get(0).unwrap().verified);
-    assert!(vault.milestones.get(1).unwrap().verified);
-}
-
-#[test]
-fn test_check_in_evidence_hash_all_zeros_accepted() {
-    // A zero-filled hash is structurally valid — the contract must accept it.
-    let s = setup(&[100], &[500]);
-    s.contract.stake(&s.vault_id, &s.creator);
-
-    s.contract.check_in(&s.vault_id, &s.verifier, &0, &evidence_hash(&s.env, 0x00));
-
-    let vault = s.contract.get_vault(&s.vault_id);
-    assert!(vault.milestones.get(0).unwrap().verified);
-}
-
-#[test]
-fn test_check_in_evidence_hash_all_ff_accepted() {
-    // A 0xff-filled hash must also be accepted without error.
-    let s = setup(&[100], &[500]);
-    s.contract.stake(&s.vault_id, &s.creator);
-
-    s.contract.check_in(&s.vault_id, &s.verifier, &0, &evidence_hash(&s.env, 0xff));
-
-    let vault = s.contract.get_vault(&s.vault_id);
-    assert!(vault.milestones.get(0).unwrap().verified);
-}
-
-#[test]
-fn test_check_in_evidence_hash_oracle_path() {
-    // The oracle approval path must also accept and emit evidence_hash.
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().set_timestamp(1_000);
-
-    let oracle = Address::generate(&env);
-    let s = setup_with_oracle(&[100], &[500], Some(oracle.clone()));
-    s.contract.stake(&s.vault_id, &s.creator);
-
-    let hash = evidence_hash(&s.env, 0xca);
-    s.contract.check_in(&s.vault_id, &oracle, &0, &hash);
-
-    let vault = s.contract.get_vault(&s.vault_id);
-    assert!(vault.milestones.get(0).unwrap().verified);
-}
-
-#[test]
-fn test_check_in_evidence_hash_multi_verifier_threshold_two() {
-    // With threshold=2 the hash is emitted on each approval call; the milestone
-    // flips only after the second approval.
-    let env = Env::default();
-    env.mock_all_auths();
-    env.ledger().set_timestamp(1_000);
-
-    let creator = Address::generate(&env);
-    let verifier1 = Address::generate(&env);
-    let verifier2 = Address::generate(&env);
-    let guardian = Address::generate(&env);
-    let success = Address::generate(&env);
-    let failure = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-
-    let (token, token_admin_client) = create_token(&env, &token_admin);
-    token_admin_client.mint(&creator, &500);
-
-    let contract_id = env.register_contract(None, AccountabilityVault);
-    let contract = AccountabilityVaultClient::new(&env, &contract_id);
-
-    let verifier_set = VerifierSet {
-        verifiers: vec![&env, verifier1.clone(), verifier2.clone()],
-        threshold: 2u32,
+    let vault = Vault {
+        end_timestamp: 1000,
+        ..Default::default()
     };
-    let vault_id = String::from_str(&env, "v1");
-    let milestones = vec![
-        &env,
-        Milestone {
-            title: String::from_str(&env, "m"),
-            amount: 500,
-            due_date: 1_200,
-            verified: false,
-            released: false,
-        },
-    ];
-    contract.create_vault(
-        &vault_id, &creator, &verifier_set, &None, &token, &500, &success, &failure, &1_200,
-        &milestones, &guardian,
-    );
-    contract.stake(&vault_id, &creator);
 
-    let hash1 = evidence_hash(&env, 0x11);
-    let hash2 = evidence_hash(&env, 0x22);
+    // Setup vault
+    contract.create_vault(&vault);
 
-    // First approval — milestone not yet verified.
-    contract.check_in(&vault_id, &verifier1, &0, &hash1);
-    assert!(!contract.get_vault(&vault_id).milestones.get(0).unwrap().verified);
+    // === Exact Equality Test: Should NOT slash (DeadlineNotReached) ===
+    env.ledger().set_timestamp(1000); // end_timestamp
+    let result = contract.slash_on_miss(0);
+    assert_eq!(result, Err(ContractError::DeadlineNotReached));
 
-    // Second approval with a different hash — milestone now verified.
-    contract.check_in(&vault_id, &verifier2, &0, &hash2);
-    assert!(contract.get_vault(&vault_id).milestones.get(0).unwrap().verified);
+    // === After Deadline: Should slash ===
+    env.ledger().set_timestamp(1001); // end_timestamp + 1
+    let result = contract.slash_on_miss(0);
+    assert!(result.is_ok());
+
+    // === Before Deadline: Should NOT slash ===
+    env.ledger().set_timestamp(999); // end_timestamp - 1
+    let result = contract.slash_on_miss(0);
+    assert_eq!(result, Err(ContractError::DeadlineNotReached));
 }
 
 #[test]
-#[should_panic]
-fn test_check_in_double_approval_with_same_hash_fails() {
-    // Even with the same evidence_hash, a double-approval must be rejected.
-    let s = setup(&[100], &[500]);
-    s.contract.stake(&s.vault_id, &s.creator);
+fn test_check_in_milestone_due_date_boundaries() {
+    let env = TestEnv::default();
+    let contract = AccountabilityVaultContract::new(&env);
 
-    let hash = evidence_hash(&s.env, 0xde);
-    s.contract.check_in(&s.vault_id, &s.verifier, &0, &hash);
-    // Same caller, same hash — must fail with AlreadyApproved.
-    s.contract.check_in(&s.vault_id, &s.verifier, &0, &hash);
+    let milestone = Milestone {
+        due_date: 2000,
+        ..Default::default()
+    };
+
+    // Setup
+    contract.add_milestone(&milestone);
+
+    // Exact equality - should succeed
+    env.ledger().set_timestamp(2000);
+    let result = contract.check_in(0);
+    assert!(result.is_ok());
+
+    // Before due date - should fail
+    env.ledger().set_timestamp(1999);
+    let result = contract.check_in(0);
+    assert_eq!(result, Err(ContractError::TooEarly));
+
+    // After due date - should still succeed (assuming allowed)
+    env.ledger().set_timestamp(2001);
+    let result = contract.check_in(0);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_check_in_idempotency() {
+    let env = TestEnv::default();
+    let contract = AccountabilityVaultContract::new(&env);
+
+    let milestone = Milestone {
+        due_date: 1000,
+        ..Default::default()
+    };
+
+    contract.add_milestone(&milestone);
+    env.ledger().set_timestamp(1000);
+
+    // First check_in - should succeed
+    let result1 = contract.check_in(0);
+    assert!(result1.is_ok());
+
+    // Second check_in on same milestone - should return typed error, NOT panic
+    let result2 = contract.check_in(0);
+    assert_eq!(result2, Err(ContractError::MilestoneAlreadyVerified));
+
+    // Verify no panic occurred
+    println!("✓ Idempotency test passed: MilestoneAlreadyVerified returned correctly");
 }

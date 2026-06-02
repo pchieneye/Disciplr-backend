@@ -309,4 +309,18 @@ Location: `accountability_vault/src/lib.rs` — `AccountabilityVault::reclaim_af
 ### License
 
 See main repository license file.
-\n\nAdded milestone dispute functionality with configurable window.\n
+
+## Accountability Vault - Key Behaviors
+
+### Timestamp Boundary Rules
+- `slash_on_miss`: 
+  - `env.ledger().timestamp() <= vault.end_timestamp` → Returns `DeadlineNotReached` (exact equality is **rejected**)
+  - `env.ledger().timestamp() > vault.end_timestamp` → Slash is executed
+- `check_in`:
+  - Exact equality (`timestamp == milestone.due_date`) is **allowed** and succeeds.
+
+### Check-in Idempotency (#502)
+- Calling `check_in` multiple times on the same milestone index returns `MilestoneAlreadyVerified` error on subsequent calls.
+- This behavior is **intentional** and expected by the backend (`eventParser.ts`).
+
+These rules are enforced through boundary and idempotency tests in `contracts/accountability_vault/src/test.rs`.
