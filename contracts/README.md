@@ -253,6 +253,18 @@ cd contracts/accountability_vault
 cargo test
 ```
 
+#### ABI Snapshot
+
+- Snapshot file: `contracts/accountability_vault/spec/AccountabilityVault.spec.json` — checked into the repo.
+- To regenerate the snapshot after intentional ABI changes, run the test which will overwrite the file when `UPDATE_SOROBAN_SPEC=1` is set:
+
+```bash
+cd contracts/accountability_vault
+UPDATE_SOROBAN_SPEC=1 cargo test test_abi_spec_snapshot -- --nocapture
+```
+
+Commit the updated JSON together with the contract changes so backend bindings can be reviewed.
+
 ### Migration: API change (cancel_vault vs withdraw)
 
 - The contract API now exposes `cancel_vault(vault_id, creator)` for explicitly

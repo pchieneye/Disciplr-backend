@@ -7,6 +7,8 @@ use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
     token, vec, Address, Env, String, Symbol,
 };
+use serde_json::json;
+use std::fs;
 
 /// Creates a deterministic 32-byte evidence hash for use in tests.
 fn evidence_hash(env: &Env, seed: u8) -> BytesN<32> {
@@ -145,6 +147,44 @@ fn test_create_and_stake() {
 
     let token_client = token::Client::new(&s.env, &s.token);
     assert_eq!(token_client.balance(&s.creator), 0);
+}
+
+#[test]
+fn test_abi_spec_snapshot() {
+    // Build a stable JSON representation of the contract ABI.
+    let spec = json!({
+        "name": "AccountabilityVault",
+        "functions": [
+            {"name":"create_vault","params":["String","Address","VerifierSet","Option<Address>","Address","i128","Address","Address","u64","Vec<Milestone>","Address"],"result":"Result<(), Error>"},
+            {"name":"stake","params":["String","Address"],"result":"Result<(), Error>"},
+            {"name":"stake_from","params":["String","Address","Address"],"result":"Result<(), Error>"},
+            {"name":"check_in","params":["Address","u32","BytesN<32>"],"result":"Result<(), Error>"},
+            {"name":"extend_deadline","params":["String","Address","u64"],"result":"Result<(), Error>"},
+            {"name":"slash_on_miss","params":[],"result":"Result<(), Error>"},
+            {"name":"claim","params":["Address"],"result":"Result<(), Error>"},
+            {"name":"claim_milestone","params":["Address","u32"],"result":"Result<(), Error>"},
+            {"name":"cancel_vault","params":["String","Address"],"result":"Result<(), Error>"},
+            {"name":"withdraw","params":["String","Address"],"result":"Result<(), Error>"},
+            {"name":"admin_dispute","params":["String","Address"],"result":"Result<(), Error>"},
+            {"name":"admin_resolve","params":["String","Address","VaultStatus"],"result":"Result<(), Error>"},
+            {"name":"emergency_pause","params":["Address"],"result":"Result<(), Error>"},
+            {"name":"emergency_unpause","params":["Address"],"result":"Result<(), Error>"},
+            {"name":"get_vault","params":["String"],"result":"Result<Vault, Error>"},
+            {"name":"reclaim_after_settlement","params":["Address"],"result":"Result<(), Error>"},
+            {"name":"configure_window","params":["u64"],"result":"()"},
+            {"name":"dispute_milestone","params":["String","Address","u32"],"result":"Result<(), Error>"}
+        ]
+    });
+
+    let pretty = serde_json::to_string_pretty(&spec).unwrap();
+
+    if std::env::var("UPDATE_SOROBAN_SPEC").is_ok() {
+        fs::create_dir_all("spec").ok();
+        fs::write("spec/AccountabilityVault.spec.json", &pretty).unwrap();
+    } else {
+        let want = fs::read_to_string("spec/AccountabilityVault.spec.json").expect("snapshot missing; set UPDATE_SOROBAN_SPEC=1 to update");
+        assert_eq!(pretty, want);
+    }
 }
 
 #[test]
