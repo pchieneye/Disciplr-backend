@@ -1,5 +1,7 @@
-import { Router, type Request, type Response } from 'express'
+import { Router, type Request, type Response, type NextFunction } from 'express'
 import { authenticate } from '../middleware/auth.middleware.js'
+import { requireScopes } from '../middleware/apiKeyAuth.js'
+import { ApiScope } from '../types/auth.js'
 import { UserRole } from '../types/user.js'
 import { VaultService } from '../services/vault.service.js'
 import { applyFilters, applySort, paginateArray } from '../utils/pagination.js'
@@ -12,10 +14,12 @@ import {
   IdempotencyConflictError,
 } from '../services/idempotency.js'
 import { buildVaultCreationPayload } from '../services/soroban.js'
-import { createVaultWithMilestones, getVaultById, listVaults, cancelVaultById } from '../services/vaultStore.js'
-import { createVaultSchema, flattenZodErrors } from '../services/vaultValidation.js'
+import { createVaultWithMilestones, getVaultById, listVaults, cancelVaultById, updateVaultById, getVaultRevisionById } from '../services/vaultStore.js'
+import { createVaultSchema, flattenZodErrors, isValidStellarAddress } from '../services/vaultValidation.js'
+import { AppError } from '../middleware/errorHandler.js'
 import { queryParser } from '../middleware/queryParser.js'
 import { utcNow } from '../utils/timestamps.js'
+import { etagMatches } from '../utils/etag.js'
 import type { VaultCreateResponse } from '../types/vaults.js'
 
 export const vaultsRouter = Router()
@@ -41,6 +45,7 @@ export interface Vault {
 vaultsRouter.get(
   '/',
   authenticate,
+  requireScopes(ApiScope.ReadVaults),
   queryParser({
     allowedSortFields: ['createdAt', 'amount', 'endTimestamp', 'status'],
     allowedFilterFields: ['status', 'creator'],
@@ -62,7 +67,7 @@ vaultsRouter.get(
 
 // POST /api/vaults 
 
-vaultsRouter.post('/', authenticate, async (req: Request, res: Response) => {
+vaultsRouter.post('/', authenticate, async (req: Request, res: Response, next: NextFunction) => {
   // 1. Idempotency – replay cached response if key+hash match
   const idempotencyKey = req.header('idempotency-key') ?? null
   const requestHash = hashRequestPayload(req.body)
@@ -90,6 +95,23 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response) => {
   }
 
   const input = parseResult.data
+
+  // Ensure Stellar addresses (verifier and destinations) pass checksum
+  try {
+    if (input.verifier && !(await isValidStellarAddress(input.verifier))) {
+      return next(AppError.validation('invalid Stellar public key', { field: 'verifier' }))
+    }
+
+    if (input.destinations?.success && !(await isValidStellarAddress(input.destinations.success))) {
+      return next(AppError.validation('invalid Stellar public key', { field: 'destinations.success' }))
+    }
+
+    if (input.destinations?.failure && !(await isValidStellarAddress(input.destinations.failure))) {
+      return next(AppError.validation('invalid Stellar public key', { field: 'destinations.failure' }))
+    }
+  } catch (err) {
+    return next(AppError.internal('address validation failed'))
+  }
 
   try {
     const { vault } = await createVaultWithMilestones(input)
@@ -123,27 +145,65 @@ vaultsRouter.post('/', authenticate, async (req: Request, res: Response) => {
 // ─── GET /api/vaults/:id ─────────────────────────────────────────────────────
 
 // GET /api/vaults/:id
-vaultsRouter.get('/:id', authenticate, async (req: Request, res: Response) => {
-  // Try DB-backed store first (falls back to in-memory automatically)
+// Supports ETag-based HTTP caching via If-None-Match header
+// Returns 304 Not Modified if client holds current version
+vaultsRouter.get('/:id', authenticate, requireScopes(ApiScope.ReadVaults), async (req: Request, res: Response) => {
   try {
-    const vault = await getVaultById(req.params.id)
-    if (vault) {
-      res.json(vault)
-      return
+    // Try DB-backed store first (falls back to in-memory automatically)
+    let vault = await getVaultById(req.params.id)
+    
+    if (!vault) {
+      // Legacy in-memory fallback
+      vault = vaults.find((v) => v.id === req.params.id)
+      if (!vault) {
+        res.status(404).json({ error: 'Vault not found' })
+        return
+      }
     }
-  } catch (_err) {
-    // fall through to legacy in-memory array
-  }
 
-  // Legacy in-memory fallback
-  const vault = vaults.find((v) => v.id === req.params.id)
-  if (!vault) {
-    res.status(404).json({ error: 'Vault not found' })
+    // Compute ETag from vault revision (optimistic-concurrency version)
+    const etag = await getVaultETag(req.params.id)
+    if (etag) {
+      res.set('ETag', etag)
+      res.set('Cache-Control', 'private, max-age=0, must-revalidate')
+
+      // Check If-None-Match header for conditional GET support
+      // RFC 7232 Section 3.2: If any of the validators match, send 304
+      const ifNoneMatch = req.headers['if-none-match'] as string | undefined
+      if (etagMatches(ifNoneMatch, etag)) {
+        res.status(304).end()
+        return
+      }
+    }
+
+    res.json(vault)
+  } catch (_err) {
+    res.status(500).json({ error: 'Failed to fetch vault' })
+  }
+})
+
+// PATCH /api/vaults/:id — optimistic-lock update; requires X-Vault-Revision header
+vaultsRouter.patch('/:id', authenticate, async (req: Request, res: Response) => {
+  const revision = req.header('x-vault-revision') ?? ''
+  if (!revision) {
+    res.status(400).json({ error: 'X-Vault-Revision header is required' })
     return
   }
-  
-  // Return the vault found in legacy in-memory storage
-  res.json(vault)
+
+  try {
+    const updated = await updateVaultById(req.params.id, revision, req.body)
+    res.json(updated)
+  } catch (err: any) {
+    if (err?.status === 409) {
+      res.status(409).json({ error: err.message ?? 'Vault update conflict' })
+      return
+    }
+    if (err?.status === 400) {
+      res.status(400).json({ error: err.message })
+      return
+    }
+    res.status(500).json({ error: 'Failed to update vault' })
+  }
 })
 
 // POST /api/vaults/:id/cancel
@@ -172,7 +232,7 @@ vaultsRouter.post('/:id/cancel', authenticate, async (req, res) => {
 })
 
 // GET /api/vaults/user/:address 
-vaultsRouter.get('/user/:address', authenticate, async (req: Request, res: Response) => {
+vaultsRouter.get('/user/:address', authenticate, requireScopes(ApiScope.ReadVaults), async (req: Request, res: Response) => {
   try {
     const userVaults = await VaultService.getVaultsByUser(req.params.address)
     res.json(userVaults)

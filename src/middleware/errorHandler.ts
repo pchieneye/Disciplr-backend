@@ -36,6 +36,9 @@ export const SorobanErrorCatalog: Record<number, { code: ErrorCode; message: str
   6: { code: ErrorCode.CONFLICT, message: 'Not draft status', status: 409 },
   7: { code: ErrorCode.CONFLICT, message: 'Not active status', status: 409 },
   8: { code: ErrorCode.UNAUTHORIZED, message: 'Unauthorized', status: 401 },
+  23: { code: ErrorCode.UNAUTHORIZED, message: 'Only creator can perform this action', status: 401 },
+  24: { code: ErrorCode.UNAUTHORIZED, message: 'Only verifier can perform this action', status: 401 },
+  25: { code: ErrorCode.UNAUTHORIZED, message: 'Only creator or verifier can perform this action', status: 401 },
   9: { code: ErrorCode.CONFLICT, message: 'Already staked', status: 409 },
   10: { code: ErrorCode.VALIDATION_ERROR, message: 'Milestone index out of range', status: 400 },
   11: { code: ErrorCode.CONFLICT, message: 'Milestone already verified', status: 409 },
@@ -106,18 +109,12 @@ export class AppError extends Error {
     return new AppError(422, ErrorCode.UNPROCESSABLE, message)
   }
 
-  /** Parses an unknown error from Soroban RPC into an AppError if it contains a recognized contract error code */
-  static fromContractError(err: unknown): AppError | null {
-    const message = err instanceof Error ? err.message : String(err)
-    // Matches Soroban Error(Contract, 4) or similar representations
-    const match = message.match(/Error\(Contract,\s*(\d+)\)/i) || message.match(/ContractError\((\d+)\)/i)
-    if (!match) return null
+  static rateLimited(message = 'Too many requests') {
+    return new AppError(429, ErrorCode.RATE_LIMITED, message)
+  }
 
-    const codeInt = parseInt(match[1], 10)
-    const mapping = SorobanErrorCatalog[codeInt]
-    if (!mapping) return null
-
-    return new AppError(mapping.status, mapping.code, mapping.message, { contractErrorCode: codeInt })
+  static payloadTooLarge(message = 'Payload too large') {
+    return new AppError(413, ErrorCode.PAYLOAD_TOO_LARGE, message)
   }
 }
 

@@ -2,8 +2,14 @@ import { NotificationProvider } from './provider.js'
 import { retryWithBackoff, DEFAULT_RETRY_CONFIG, isRetryable } from '../../utils/retry.js'
 import { recordBounce } from './bounceStore.js'
 
+/**
+ * EmailNotificationProvider implements the NotificationProvider interface.
+ * It sends email notifications. Currently this is a stub that simulates latency.
+ * Transient SMTP 4xx errors are retried using exponential backoff with jitter.
+ * 5xx errors are considered permanent and are not retried, preserving dead‑letter semantics.
+ */
 export class EmailNotificationProvider implements NotificationProvider {
-  readonly name = 'email'
+  readonly name = 'email';
 
   /**
    * Classify whether an error represents a permanent bounce
