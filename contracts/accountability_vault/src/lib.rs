@@ -399,7 +399,10 @@ impl AccountabilityVault {
             return Err(Error::MilestoneIndexOutOfRange);
         }
 
-        let mut milestone = vault.milestones.get(milestone_index).unwrap();
+        let mut milestone = vault
+            .milestones
+            .get(milestone_index)
+            .ok_or(Error::MilestoneIndexOutOfRange)?;
         if milestone.verified {
             return Err(Error::MilestoneAlreadyVerified);
         }
@@ -629,7 +632,10 @@ impl AccountabilityVault {
             return Err(Error::MilestoneIndexOutOfRange);
         }
 
-        let mut milestone = vault.milestones.get(index).unwrap();
+        let mut milestone = vault
+            .milestones
+            .get(index)
+            .ok_or(Error::MilestoneIndexOutOfRange)?;
         if !milestone.verified {
             return Err(Error::MilestonesIncomplete);
         }

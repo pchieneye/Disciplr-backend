@@ -136,6 +136,16 @@ fn test_check_in_and_claim_success() {
 }
 
 #[test]
+fn test_check_in_out_of_range_returns_typed_error() {
+    let s = setup(&[100], &[500]);
+    s.contract.stake(&s.vault_id, &s.creator);
+
+    let result = s.contract.try_check_in(&s.verifier, &1);
+
+    assert!(matches!(result, Err(Ok(Error::MilestoneIndexOutOfRange))));
+}
+
+#[test]
 fn test_slash_on_miss() {
     let s = setup(&[100], &[500]);
     s.contract.stake(&s.vault_id, &s.creator);
