@@ -25,8 +25,12 @@
     "openapi:validate": "redocly stats docs/openapi.yaml"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1058.0",
+    "@aws-sdk/lib-storage": "^3.1058.0",
+    "@aws-sdk/s3-request-presigner": "^3.1058.0",
     "@prisma/client": "^6.19.2",
     "@stellar/stellar-sdk": "^14.5.0",
+    "argon2": "^0.31.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^11.10.0",
     "cors": "^2.8.6",
@@ -68,7 +72,6 @@
     "prisma": "^6.19.2",
     "supertest": "^7.2.2",
     "ts-jest": "^29.4.6",
-    "ts-node": "^10.9.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^4.0.18",
