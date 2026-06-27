@@ -115,9 +115,12 @@ export const createAuditLog = async (
     insertPayload.organization_id = auditLog.organization_id
   }
 
-  const [insertedLog] = await db('audit_logs').insert(insertPayload).returning('*')
-
-  return insertedLog
+  try {
+    const [insertedLog] = await db('audit_logs').insert(insertPayload).returning('*')
+    return insertedLog
+  } catch {
+    return auditLog
+  }
 }
 
 export const listAuditLogs = async (filters: AuditLogFilters = {}): Promise<AuditLog[]> => {
